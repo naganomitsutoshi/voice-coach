@@ -1,0 +1,1041 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Voice Coach</title>
+  <meta name="theme-color" content="#1a1d23">
+  <meta name="description" content="Android Chrome 向けの単一ファイル音声コーチ検証アプリ">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <style>
+    :root {
+      --bg: #1a1d23;
+      --panel: rgba(10, 12, 16, 0.7);
+      --panel-strong: rgba(8, 10, 13, 0.86);
+      --line: rgba(255, 255, 255, 0.12);
+      --text: #f6f7fb;
+      --muted: rgba(246, 247, 251, 0.66);
+      --accent: #e9edf7;
+      --idle: #8f98a8;
+      --listening: #69d48e;
+      --speaking: #f2ab59;
+      --error: #ff7d73;
+      --shadow: 0 22px 60px rgba(0, 0, 0, 0.35);
+      color-scheme: dark;
+      font-family: "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+    }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      background: var(--bg);
+      transition: background-color 180ms ease;
+    }
+
+    body.state-idle {
+      --bg: #1a1d23;
+    }
+
+    body.state-listening {
+      --bg: #123f2a;
+    }
+
+    body.state-speaking {
+      --bg: #4a2e10;
+    }
+
+    body.state-error {
+      --bg: #3f1512;
+    }
+
+    .app {
+      width: min(1120px, calc(100vw - 24px));
+      margin: 0 auto;
+      padding: 20px 0 150px;
+    }
+
+    .hero,
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .hero {
+      padding: 22px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(34px, 8vw, 68px);
+      line-height: 0.95;
+    }
+
+    .lede {
+      max-width: 64ch;
+      margin: 12px 0 0;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    .status-bar,
+    .metrics {
+      display: grid;
+      gap: 10px;
+    }
+
+    .status-bar {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      margin-top: 18px;
+    }
+
+    .metric-card {
+      padding: 14px 16px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .metric-card strong,
+    .section-label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .metric-card span {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.5fr 0.9fr;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .panel {
+      padding: 20px;
+    }
+
+    .panel h2 {
+      margin: 0 0 14px;
+      font-size: 18px;
+    }
+
+    .state-indicator {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 16px;
+      border-radius: 22px;
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+    }
+
+    .dot {
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      background: var(--idle);
+      transition: background-color 140ms ease, box-shadow 140ms ease;
+    }
+
+    .state-idle .dot {
+      background: var(--idle);
+      box-shadow: 0 0 0 0 rgba(143, 152, 168, 0);
+    }
+
+    .state-listening .dot {
+      background: var(--listening);
+      box-shadow: 0 0 0 8px rgba(105, 212, 142, 0.18);
+    }
+
+    .state-speaking .dot {
+      background: var(--speaking);
+      box-shadow: 0 0 0 8px rgba(242, 171, 89, 0.18);
+    }
+
+    .state-error .dot {
+      background: var(--error);
+      box-shadow: 0 0 0 8px rgba(255, 125, 115, 0.18);
+    }
+
+    .state-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .state-copy strong {
+      font-size: 22px;
+    }
+
+    .state-copy span {
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 18px;
+      padding: 14px 18px;
+      font: inherit;
+      font-weight: 700;
+      color: var(--text);
+      cursor: pointer;
+      transition: transform 120ms ease, opacity 120ms ease, background-color 120ms ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+    }
+
+    button:active {
+      transform: translateY(0);
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .primary {
+      background: linear-gradient(135deg, #6fc3ff, #3b7dff);
+    }
+
+    .secondary {
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .warn {
+      background: linear-gradient(135deg, #ff9f7a, #ff5e58);
+    }
+
+    /* 運転前後に押す大ボタン（画面下部固定・全幅） */
+    .bigbar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 20;
+      padding: 12px 12px calc(14px + env(safe-area-inset-bottom, 0px));
+      background: linear-gradient(transparent, rgba(0, 0, 0, 0.65) 45%);
+    }
+
+    .bigbar button {
+      width: 100%;
+      min-height: 76px;
+      font-size: 26px;
+      border-radius: 22px;
+    }
+
+    .bigbar button[hidden] {
+      display: none;
+    }
+
+    .transcript {
+      margin-top: 16px;
+      padding: 18px;
+      border-radius: 24px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .final-text {
+      min-height: 1.2em;
+      font-size: clamp(42px, 8vw, 72px);
+      line-height: 1.02;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      text-align: center;
+      word-break: break-word;
+    }
+
+    .interim-text {
+      min-height: 1.5em;
+      margin-top: 14px;
+      text-align: center;
+      font-size: clamp(18px, 3vw, 24px);
+      color: var(--muted);
+      word-break: break-word;
+    }
+
+    .spoken-box {
+      margin-top: 16px;
+      padding: 16px;
+      border-radius: 22px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .spoken-box p,
+    .hint {
+      margin: 0;
+      line-height: 1.7;
+      color: var(--muted);
+    }
+
+    .metrics {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-top: 12px;
+    }
+
+    .log-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    pre {
+      min-height: 220px;
+      max-height: 360px;
+      margin: 0;
+      overflow: auto;
+      padding: 14px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: #0c0e12;
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .foot {
+      margin-top: 14px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    @media (max-width: 860px) {
+      .status-bar,
+      .grid,
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+
+      .final-text {
+        font-size: clamp(38px, 14vw, 64px);
+      }
+    }
+  </style>
+</head>
+<body class="state-idle">
+  <main class="app">
+    <section class="hero">
+      <p class="eyebrow">Phase 0 / Android Chrome</p>
+      <h1>Voice Coach</h1>
+      <p class="lede">実車検証用のエコー対話デモです。話しかけると「『…』と聞こえました。」と復唱＋問いかけを返します。音声で「終了」と言うとテストを終えます。読み上げ中はマイクを止める半二重方式です。</p>
+      <div class="status-bar">
+        <div class="metric-card">
+          <strong>現在状態</strong>
+          <span id="statusLabel">idle</span>
+        </div>
+        <div class="metric-card">
+          <strong>認識状態</strong>
+          <span id="recognitionLabel">未初期化</span>
+        </div>
+        <div class="metric-card">
+          <strong>Wake Lock</strong>
+          <span id="wakeLockLabel">未取得</span>
+        </div>
+        <div class="metric-card">
+          <strong>最終更新</strong>
+          <span id="updatedLabel">-</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>Conversation</h2>
+
+        <div id="stateCard" class="state-indicator state-idle">
+          <div class="dot" aria-hidden="true"></div>
+          <div class="state-copy">
+            <strong id="stateTitle">Idle</strong>
+            <span id="stateDescription">開始を押すと認識を開始します。</span>
+          </div>
+        </div>
+
+        <section class="transcript" aria-live="polite">
+          <span class="section-label">最新の認識結果</span>
+          <div id="finalText" class="final-text"></div>
+          <div id="interimText" class="interim-text"></div>
+        </section>
+
+        <section class="spoken-box">
+          <span class="section-label">直近の読み上げ</span>
+          <p id="spokenText">まだ読み上げはありません。</p>
+        </section>
+      </div>
+
+      <aside class="panel">
+        <h2>Diagnostics</h2>
+
+        <p class="hint">`speaking` 中は認識を再開しません。TTS の `onend` か 15 秒タイムアウトでのみ `listening` に戻します。`network` は 1 回だけ再試行し、`not-allowed` はエラー表示で停止します。</p>
+
+        <div class="metrics">
+          <div class="metric-card">
+            <strong>再起動回数</strong>
+            <span id="restartCount">0</span>
+          </div>
+          <div class="metric-card">
+            <strong>最新 confidence</strong>
+            <span id="confidenceValue">-</span>
+          </div>
+          <div class="metric-card">
+            <strong>音声数</strong>
+            <span id="voiceCount">0</span>
+          </div>
+          <div class="metric-card">
+            <strong>エラー回数</strong>
+            <span id="errorCount">0</span>
+          </div>
+        </div>
+
+        <div class="log-head">
+          <span class="section-label">Event Log</span>
+          <div class="controls">
+            <button id="copyLogBtn" class="secondary">ログコピー</button>
+            <button id="clearLogBtn" class="secondary">ログ消去</button>
+          </div>
+        </div>
+        <pre id="logView"></pre>
+      </aside>
+    </section>
+
+    <p class="foot">単一 HTML で動作します。Service Worker は使わず、診断ログは `localStorage` に保持します。</p>
+
+    <div class="bigbar">
+      <button id="startBtn" class="primary">開始</button>
+      <button id="stopBtn" class="warn" hidden>停止</button>
+    </div>
+  </main>
+
+  <script>
+    (() => {
+      const STORAGE_KEY = "voicecoach:log";
+      const MAX_LOGS = 1000;
+      const RESTART_DELAY_MS = 250;
+      const SPEAK_TIMEOUT_MS = 15000;
+      const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+      // 対話用の固定文言（Phase 0 はエコー応答のみ・Claude API 不使用）
+      const GREETING_TEXT = "こんにちは。マイクテストを始めます。何か話しかけてください。";
+      const FAREWELL_TEXT = "テストを終了します。お疲れさまでした。";
+      const END_COMMAND_RE = /(終了|しゅうりょう|おわり)/;
+      const FOLLOWUPS = ["続けてどうぞ。", "もう少し詳しく教えてください。", "他にはありますか。"];
+
+      const STATE_META = {
+        idle: {
+          title: "Idle",
+          description: "開始を押すと認識を開始します。"
+        },
+        listening: {
+          title: "Listening",
+          description: "マイク入力を待っています。"
+        },
+        speaking: {
+          title: "Speaking",
+          description: "応答を読み上げています。"
+        },
+        error: {
+          title: "Error",
+          description: "エラーが発生しました。"
+        }
+      };
+
+      const elements = {
+        body: document.body,
+        statusLabel: document.getElementById("statusLabel"),
+        recognitionLabel: document.getElementById("recognitionLabel"),
+        wakeLockLabel: document.getElementById("wakeLockLabel"),
+        updatedLabel: document.getElementById("updatedLabel"),
+        stateCard: document.getElementById("stateCard"),
+        stateTitle: document.getElementById("stateTitle"),
+        stateDescription: document.getElementById("stateDescription"),
+        finalText: document.getElementById("finalText"),
+        interimText: document.getElementById("interimText"),
+        spokenText: document.getElementById("spokenText"),
+        restartCount: document.getElementById("restartCount"),
+        confidenceValue: document.getElementById("confidenceValue"),
+        voiceCount: document.getElementById("voiceCount"),
+        errorCount: document.getElementById("errorCount"),
+        logView: document.getElementById("logView"),
+        startBtn: document.getElementById("startBtn"),
+        stopBtn: document.getElementById("stopBtn"),
+        copyLogBtn: document.getElementById("copyLogBtn"),
+        clearLogBtn: document.getElementById("clearLogBtn")
+      };
+
+      const app = {
+        recognition: null,
+        wakeLock: null,
+        active: false,
+        recognizing: false,
+        speaking: false,
+        stopping: false,
+        restartTimer: 0,
+        speakTimeout: 0,
+        speakToken: 0,
+        followupIndex: 0,
+        finalText: "",
+        interimText: "",
+        pendingChunks: [],
+        restartCount: 0,
+        errorCount: 0,
+        networkRetryCount: 0,
+        lastConfidence: null,
+        voices: [],
+        logs: loadLogs()
+      };
+
+      initialize();
+
+      function initialize() {
+        renderLogs();
+        updateVoiceList();
+        updateStatus("idle");
+        setRecognitionStatus(SpeechRecognitionCtor ? "待機中" : "未対応");
+        bindEvents();
+
+        if (!SpeechRecognitionCtor) {
+          showError("このブラウザでは SpeechRecognition を利用できません。Android Chrome で確認してください。");
+        }
+
+        logEvent("init", {
+          speechRecognition: Boolean(SpeechRecognitionCtor),
+          speechSynthesis: "speechSynthesis" in window,
+          wakeLock: Boolean(navigator.wakeLock && navigator.wakeLock.request)
+        });
+      }
+
+      function bindEvents() {
+        elements.startBtn.addEventListener("click", startSession);
+        elements.stopBtn.addEventListener("click", stopSession);
+        elements.copyLogBtn.addEventListener("click", copyLogs);
+        elements.clearLogBtn.addEventListener("click", clearLogs);
+
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "visible" && app.active) {
+            acquireWakeLock();
+          }
+        });
+
+        if ("speechSynthesis" in window) {
+          if (typeof window.speechSynthesis.addEventListener === "function") {
+            window.speechSynthesis.addEventListener("voiceschanged", updateVoiceList);
+          }
+          window.speechSynthesis.onvoiceschanged = updateVoiceList;
+        }
+      }
+
+      async function startSession() {
+        if (!SpeechRecognitionCtor || app.speaking) {
+          return;
+        }
+        if (app.active && (app.recognizing || app.restartTimer)) {
+          return;
+        }
+
+        app.active = true;
+        app.stopping = false;
+        app.networkRetryCount = 0;
+        clearTimeout(app.restartTimer);
+        await acquireWakeLock();
+        ensureRecognition();
+        logEvent("session-start", {});
+        // 挨拶を読み上げ、終了後に listening へ（半二重を維持）
+        speakCoachResponse(GREETING_TEXT);
+      }
+
+      function stopSession() {
+        app.active = false;
+        app.stopping = true;
+        app.speaking = false;
+        app.pendingChunks = [];
+        app.speakToken += 1;
+        clearTimeout(app.restartTimer);
+        clearTimeout(app.speakTimeout);
+
+        if ("speechSynthesis" in window) {
+          window.speechSynthesis.cancel();
+        }
+
+        if (app.recognition && app.recognizing) {
+          app.recognition.stop();
+        }
+
+        updateStatus("idle");
+        setRecognitionStatus(SpeechRecognitionCtor ? "停止" : "未対応");
+        syncControls();
+        logEvent("stop", { reason: "manual" });
+      }
+
+      async function acquireWakeLock() {
+        if (!(navigator.wakeLock && navigator.wakeLock.request)) {
+          elements.wakeLockLabel.textContent = "未対応";
+          return;
+        }
+
+        try {
+          if (app.wakeLock) {
+            await app.wakeLock.release().catch(() => {});
+          }
+
+          app.wakeLock = await navigator.wakeLock.request("screen");
+          app.wakeLock.addEventListener("release", () => {
+            elements.wakeLockLabel.textContent = "解除";
+            logEvent("wake-lock-release", {});
+          });
+          elements.wakeLockLabel.textContent = "取得中";
+          logEvent("wake-lock", { state: "acquired" });
+        } catch (error) {
+          elements.wakeLockLabel.textContent = "失敗";
+          logEvent("wake-lock-error", { message: getErrorMessage(error) });
+        }
+      }
+
+      function ensureRecognition() {
+        if (app.recognition) {
+          return;
+        }
+
+        const recognition = new SpeechRecognitionCtor();
+        recognition.lang = "ja-JP";
+        recognition.interimResults = true;
+        recognition.continuous = true;
+
+        recognition.onstart = () => {
+          app.recognizing = true;
+          app.stopping = false;
+          setRecognitionStatus("認識中");
+          if (!app.speaking) {
+            updateStatus("listening");
+          }
+          syncControls();
+          logEvent("start", {});
+        };
+
+        recognition.onresult = (event) => {
+          let interim = "";
+          let finalChunk = "";
+          let lastConfidence = null;
+
+          for (let index = event.resultIndex; index < event.results.length; index += 1) {
+            const result = event.results[index];
+            const transcript = result[0].transcript.trim();
+            const confidence = typeof result[0].confidence === "number" ? result[0].confidence : null;
+
+            if (confidence !== null) {
+              lastConfidence = confidence;
+            }
+
+            if (result.isFinal) {
+              finalChunk += (finalChunk ? " " : "") + transcript;
+            } else {
+              interim += (interim ? " " : "") + transcript;
+            }
+          }
+
+          app.interimText = interim;
+          elements.interimText.textContent = interim;
+
+          if (lastConfidence !== null) {
+            app.lastConfidence = lastConfidence;
+            elements.confidenceValue.textContent = lastConfidence.toFixed(2);
+          }
+
+          if (finalChunk) {
+            app.finalText = finalChunk;
+            app.interimText = "";
+            elements.finalText.textContent = finalChunk;
+            elements.interimText.textContent = "";
+            logEvent("result-final", { text: finalChunk, confidence: lastConfidence });
+
+            if (END_COMMAND_RE.test(finalChunk)) {
+              // 音声コマンド「終了」: お別れを読み上げてループを止める
+              logEvent("end-command", { text: finalChunk });
+              app.pendingChunks = [];
+              app.active = false;
+              speakCoachResponse(FAREWELL_TEXT);
+            } else {
+              app.pendingChunks.push(finalChunk);
+              if (!app.speaking) {
+                speakNextChunk();
+              }
+            }
+          }
+
+          elements.updatedLabel.textContent = timeStamp();
+        };
+
+        recognition.onerror = (event) => {
+          app.errorCount += 1;
+          elements.errorCount.textContent = String(app.errorCount);
+          logEvent("error", { error: event.error, message: event.message || "" });
+
+          if (event.error === "no-speech" || event.error === "aborted") {
+            return;
+          }
+
+          if (event.error === "network" && app.networkRetryCount < 1 && app.active) {
+            app.networkRetryCount += 1;
+            setRecognitionStatus("再試行中");
+            scheduleRestart("network-retry");
+            return;
+          }
+
+          if (event.error === "not-allowed") {
+            app.active = false;
+            app.stopping = true;
+            showError("マイク権限が拒否されました。Chrome のサイト設定で許可してください。");
+            syncControls();
+            return;
+          }
+
+          showError("音声認識エラー: " + event.error);
+        };
+
+        recognition.onend = () => {
+          app.recognizing = false;
+          setRecognitionStatus("停止");
+          syncControls();
+          logEvent("end", {
+            active: app.active,
+            speaking: app.speaking,
+            stopping: app.stopping
+          });
+
+          if (!app.active || app.stopping || app.speaking) {
+            return;
+          }
+
+          scheduleRestart("onend");
+        };
+
+        app.recognition = recognition;
+      }
+
+      function startRecognition(source) {
+        if (!app.recognition || !app.active || app.recognizing || app.speaking) {
+          return;
+        }
+
+        clearTimeout(app.restartTimer);
+
+        try {
+          app.recognition.start();
+          logEvent("restart", { source });
+        } catch (error) {
+          if (error && error.name === "InvalidStateError") {
+            scheduleRestart("invalid-state");
+            return;
+          }
+
+          showError("音声認識を開始できません: " + getErrorMessage(error));
+        }
+      }
+
+      function scheduleRestart(reason) {
+        clearTimeout(app.restartTimer);
+        app.restartTimer = window.setTimeout(() => {
+          app.restartTimer = 0;
+
+          if (!app.active || app.speaking) {
+            return;
+          }
+
+          app.restartCount += 1;
+          elements.restartCount.textContent = String(app.restartCount);
+          startRecognition(reason);
+        }, RESTART_DELAY_MS);
+      }
+
+      function speakNextChunk() {
+        if (app.speaking) {
+          return;
+        }
+
+        const nextChunk = app.pendingChunks.shift();
+        if (!nextChunk) {
+          if (app.active && !app.recognizing) {
+            updateStatus("listening");
+            scheduleRestart("queue-empty");
+          } else if (!app.active) {
+            updateStatus("idle");
+          }
+          return;
+        }
+
+        // エコー応答: 聞こえた内容の復唱 + ローテーションの問いかけ
+        const followup = FOLLOWUPS[app.followupIndex % FOLLOWUPS.length];
+        app.followupIndex += 1;
+        speakCoachResponse("『" + nextChunk + "』と聞こえました。" + followup);
+      }
+
+      function speakCoachResponse(text) {
+        if (!text) {
+          speakNextChunk();
+          return;
+        }
+
+        if (!("speechSynthesis" in window)) {
+          showError("このブラウザでは speechSynthesis を利用できません。");
+          return;
+        }
+
+        clearTimeout(app.restartTimer);
+        clearTimeout(app.speakTimeout);
+        app.speaking = true;
+        app.networkRetryCount = 0;
+        elements.spokenText.textContent = text;
+        updateStatus("speaking");
+
+        if (app.recognition && app.recognizing) {
+          app.recognition.stop();
+        }
+
+        window.speechSynthesis.cancel();
+
+        // 文単位に分割して順次キューへ（長文で途切れる既知バグ対策）
+        const segments = splitSentences(text);
+        const voice = pickJapaneseVoice();
+        const token = ++app.speakToken;
+        let remaining = segments.length;
+
+        segments.forEach((segment, index) => {
+          const utterance = new SpeechSynthesisUtterance(segment);
+          utterance.lang = "ja-JP";
+          utterance.rate = 1;
+          utterance.pitch = 1;
+          utterance.volume = 1;
+          if (voice) {
+            utterance.voice = voice;
+          }
+
+          if (index === 0) {
+            utterance.onstart = () => {
+              if (token !== app.speakToken) return;
+              syncControls();
+              logEvent("speak-start", {
+                text: text,
+                segments: segments.length,
+                voice: voice ? voice.name : "default"
+              });
+            };
+          }
+
+          const settle = (errorCode) => {
+            if (token !== app.speakToken) return;
+            if (errorCode) {
+              logEvent("speak-error", { error: errorCode, segment: index });
+            }
+            remaining -= 1;
+            if (remaining === 0) {
+              finishSpeaking(errorCode ? "onerror" : "onend");
+            }
+          };
+
+          utterance.onend = () => settle(null);
+          utterance.onerror = (event) => settle(event.error || "unknown");
+
+          window.speechSynthesis.speak(utterance);
+        });
+
+        app.speakTimeout = window.setTimeout(() => {
+          if (!app.speaking || token !== app.speakToken) {
+            return;
+          }
+
+          app.speakToken += 1; // 以降の utterance イベントを無効化
+          window.speechSynthesis.cancel();
+          logEvent("speak-timeout", { timeoutMs: SPEAK_TIMEOUT_MS });
+          finishSpeaking("timeout");
+        }, SPEAK_TIMEOUT_MS);
+      }
+
+      function splitSentences(text) {
+        const parts = text.match(/[^。！？!?]+[。！？!?]*/g) || [];
+        const trimmed = parts.map((part) => part.trim()).filter(Boolean);
+        return trimmed.length ? trimmed : [text];
+      }
+
+      function finishSpeaking(source) {
+        if (!app.speaking) {
+          return;
+        }
+        clearTimeout(app.speakTimeout);
+        app.speaking = false;
+        logEvent("speak-end", { source: source, remaining: app.pendingChunks.length });
+        syncControls();
+
+        if (app.pendingChunks.length > 0) {
+          speakNextChunk();
+          return;
+        }
+
+        if (app.active) {
+          updateStatus("listening");
+          scheduleRestart("tts-" + source);
+          return;
+        }
+
+        updateStatus("idle");
+      }
+
+      function updateStatus(state, overrideDescription) {
+        const meta = STATE_META[state] || STATE_META.idle;
+        elements.statusLabel.textContent = state;
+        elements.stateTitle.textContent = meta.title;
+        elements.stateDescription.textContent = overrideDescription || meta.description;
+        elements.stateCard.className = "state-indicator state-" + state;
+        elements.body.className = "state-" + state;
+        elements.updatedLabel.textContent = timeStamp();
+        syncControls();
+      }
+
+      function setRecognitionStatus(text) {
+        elements.recognitionLabel.textContent = text;
+      }
+
+      function showError(message) {
+        updateStatus("error", message);
+      }
+
+      function syncControls() {
+        // 稼働中（発話中含む）は停止のみ、待機中は開始のみを表示
+        const running = app.active || app.speaking || app.recognizing;
+        elements.startBtn.hidden = running;
+        elements.stopBtn.hidden = !running;
+        elements.startBtn.disabled = !SpeechRecognitionCtor;
+        elements.stopBtn.disabled = false;
+      }
+
+      function updateVoiceList() {
+        if (!("speechSynthesis" in window)) {
+          return;
+        }
+
+        app.voices = window.speechSynthesis.getVoices();
+        elements.voiceCount.textContent = String(app.voices.length);
+      }
+
+      function pickJapaneseVoice() {
+        return app.voices.find((voice) => /^ja(-|$)/i.test(voice.lang)) ||
+          app.voices.find((voice) => /japan/i.test(voice.name)) ||
+          null;
+      }
+
+      function loadLogs() {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          return raw ? JSON.parse(raw) : [];
+        } catch (error) {
+          return [];
+        }
+      }
+
+      function logEvent(type, detail) {
+        const entry = {
+          ts: new Date().toISOString(),
+          type: type,
+          detail: detail
+        };
+
+        app.logs.push(entry);
+        if (app.logs.length > MAX_LOGS) {
+          app.logs = app.logs.slice(-MAX_LOGS);
+        }
+
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(app.logs));
+        renderLogs();
+      }
+
+      function renderLogs() {
+        elements.logView.textContent = app.logs.map((entry) => JSON.stringify(entry)).join("\n");
+      }
+
+      async function copyLogs() {
+        const text = app.logs.map((entry) => JSON.stringify(entry)).join("\n");
+        if (!text) {
+          return;
+        }
+
+        try {
+          await navigator.clipboard.writeText(text);
+          logEvent("log-copy", { count: app.logs.length });
+        } catch (error) {
+          showError("ログをコピーできませんでした: " + getErrorMessage(error));
+        }
+      }
+
+      function clearLogs() {
+        app.logs = [];
+        localStorage.removeItem(STORAGE_KEY);
+        renderLogs();
+        logEvent("log-clear", {});
+      }
+
+      function timeStamp() {
+        return new Intl.DateTimeFormat("ja-JP", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit"
+        }).format(new Date());
+      }
+
+      function getErrorMessage(error) {
+        if (!error) {
+          return "unknown";
+        }
+
+        if (typeof error.message === "string" && error.message) {
+          return error.message;
+        }
+
+        return String(error);
+      }
+    })();
+  </script>
+</body>
+</html>
