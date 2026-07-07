@@ -267,6 +267,10 @@
       display: none;
     }
 
+    .pause-btn[aria-pressed="true"] {
+      background: linear-gradient(135deg, #6fc3ff, #3b7dff);
+    }
+
     .transcript {
       margin-top: 16px;
       padding: 18px;
@@ -411,7 +415,16 @@
       <aside class="panel">
         <h2>Diagnostics</h2>
 
-        <p class="hint">`speaking` 中は認識を再開しません。TTS の `onend` か 15 秒タイムアウトでのみ `listening` に戻します。`network` は 1 回だけ再試行し、`not-allowed` はエラー表示で停止します。</p>
+        <p class="hint">`speaking` 中は認識を再開しません。TTS の `onend` か 15 秒タイムアウトでのみ `listening` に戻します。応答は「間」の秒数だけ無音が続いてから返します（息継ぎで途切れて復唱が始まるのを防止）。</p>
+
+        <div>
+          <span class="section-label">応答までの間（無音がこの秒数続いたら話し終わりとみなす）</span>
+          <div class="controls">
+            <button class="secondary pause-btn" data-pause="1200">1.2秒</button>
+            <button class="secondary pause-btn" data-pause="1800">1.8秒</button>
+            <button class="secondary pause-btn" data-pause="2500">2.5秒</button>
+          </div>
+        </div>
 
         <div class="metrics">
           <div class="metric-card">
@@ -465,6 +478,11 @@
       const END_COMMAND_RE = /(終了|しゅうりょう|おわり)/;
       const FOLLOWUPS = ["続けてどうぞ。", "もう少し詳しく教えてください。", "他にはありますか。"];
 
+      // 発話終了とみなす無音時間（実車QAで「話し終わる前に復唱が始まる」対策）
+      // 確定チャンクを即応答せず、この時間だけ続きを待って束ねてから応答する
+      const PAUSE_KEY = "voicecoach:pause";
+      const DEFAULT_PAUSE_MS = 1800;
+
       const STATE_META = {
         idle: {
           title: "Idle",
@@ -504,7 +522,8 @@
         startBtn: document.getElementById("startBtn"),
         stopBtn: document.getElementById("stopBtn"),
         copyLogBtn: document.getElementById("copyLogBtn"),
-        clearLogBtn: document.getElementById("clearLogBtn")
+        clearLogBtn: document.getElementById("clearLogBtn"),
+        pauseButtons: Array.from(document.querySelectorAll(".pause-btn"))
       };
 
       const app = {
@@ -518,6 +537,9 @@
         speakTimeout: 0,
         speakToken: 0,
         followupIndex: 0,
+        pendingUtterance: "",
+        utteranceTimer: 0,
+        pauseWindowMs: Number(localStorage.getItem(PAUSE_KEY)) || DEFAULT_PAUSE_MS,
         finalText: "",
         interimText: "",
         pendingChunks: [],
@@ -534,6 +556,7 @@
       function initialize() {
         renderLogs();
         updateVoiceList();
+        renderPauseButtons();
         updateStatus("idle");
         setRecognitionStatus(SpeechRecognitionCtor ? "待機中" : "未対応");
         bindEvents();
@@ -554,6 +577,19 @@
         elements.stopBtn.addEventListener("click", stopSession);
         elements.copyLogBtn.addEventListener("click", copyLogs);
         elements.clearLogBtn.addEventListener("click", clearLogs);
+
+        elements.pauseButtons.forEach((button) => {
+          button.addEventListener("click", () => {
+            app.pauseWindowMs = Number(button.dataset.pause) || DEFAULT_PAUSE_MS;
+            localStorage.setItem(PAUSE_KEY, String(app.pauseWindowMs));
+            renderPauseButtons();
+            logEvent("pause-window", { ms: app.pauseWindowMs });
+            // 待機中に変更されたら新しい間で取り直す
+            if (app.utteranceTimer) {
+              scheduleUtteranceCommit();
+            }
+          });
+        });
 
         document.addEventListener("visibilitychange", () => {
           if (document.visibilityState === "visible" && app.active) {
@@ -593,9 +629,12 @@
         app.stopping = true;
         app.speaking = false;
         app.pendingChunks = [];
+        app.pendingUtterance = "";
         app.speakToken += 1;
         clearTimeout(app.restartTimer);
         clearTimeout(app.speakTimeout);
+        clearTimeout(app.utteranceTimer);
+        app.utteranceTimer = 0;
 
         if ("speechSynthesis" in window) {
           window.speechSynthesis.cancel();
@@ -686,24 +725,20 @@
           }
 
           if (finalChunk) {
-            app.finalText = finalChunk;
+            // 即応答せず束ねる: 息継ぎで isFinal が確定しても、無音が
+            // pauseWindowMs 続くまで発話の続きを待つ
+            app.pendingUtterance = app.pendingUtterance
+              ? app.pendingUtterance + " " + finalChunk
+              : finalChunk;
+            app.finalText = app.pendingUtterance;
             app.interimText = "";
-            elements.finalText.textContent = finalChunk;
+            elements.finalText.textContent = app.pendingUtterance;
             elements.interimText.textContent = "";
             logEvent("result-final", { text: finalChunk, confidence: lastConfidence });
-
-            if (END_COMMAND_RE.test(finalChunk)) {
-              // 音声コマンド「終了」: お別れを読み上げてループを止める
-              logEvent("end-command", { text: finalChunk });
-              app.pendingChunks = [];
-              app.active = false;
-              speakCoachResponse(FAREWELL_TEXT);
-            } else {
-              app.pendingChunks.push(finalChunk);
-              if (!app.speaking) {
-                speakNextChunk();
-              }
-            }
+            scheduleUtteranceCommit();
+          } else if (interim && app.utteranceTimer) {
+            // まだ話し続けている間は応答タイマーを延長する
+            scheduleUtteranceCommit();
           }
 
           elements.updatedLabel.textContent = timeStamp();
@@ -776,6 +811,38 @@
         }
       }
 
+      function scheduleUtteranceCommit() {
+        clearTimeout(app.utteranceTimer);
+        app.utteranceTimer = window.setTimeout(() => {
+          app.utteranceTimer = 0;
+          commitUtterance();
+        }, app.pauseWindowMs);
+      }
+
+      function commitUtterance() {
+        const utteranceText = app.pendingUtterance.trim();
+        app.pendingUtterance = "";
+        if (!utteranceText || app.speaking || !app.active) {
+          return;
+        }
+
+        logEvent("utterance-commit", { text: utteranceText, pauseMs: app.pauseWindowMs });
+
+        if (END_COMMAND_RE.test(utteranceText)) {
+          // 音声コマンド「終了」: お別れを読み上げてループを止める
+          logEvent("end-command", { text: utteranceText });
+          app.pendingChunks = [];
+          app.active = false;
+          speakCoachResponse(FAREWELL_TEXT);
+          return;
+        }
+
+        app.pendingChunks.push(utteranceText);
+        if (!app.speaking) {
+          speakNextChunk();
+        }
+      }
+
       function scheduleRestart(reason) {
         clearTimeout(app.restartTimer);
         app.restartTimer = window.setTimeout(() => {
@@ -826,6 +893,8 @@
 
         clearTimeout(app.restartTimer);
         clearTimeout(app.speakTimeout);
+        clearTimeout(app.utteranceTimer);
+        app.utteranceTimer = 0;
         app.speaking = true;
         app.networkRetryCount = 0;
         elements.spokenText.textContent = text;
@@ -949,6 +1018,13 @@
         elements.stopBtn.hidden = !running;
         elements.startBtn.disabled = !SpeechRecognitionCtor;
         elements.stopBtn.disabled = false;
+      }
+
+      function renderPauseButtons() {
+        elements.pauseButtons.forEach((button) => {
+          const selected = Number(button.dataset.pause) === app.pauseWindowMs;
+          button.setAttribute("aria-pressed", String(selected));
+        });
       }
 
       function updateVoiceList() {
