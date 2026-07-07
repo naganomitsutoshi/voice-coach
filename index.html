@@ -682,7 +682,10 @@
         const recognition = new SpeechRecognitionCtor();
         recognition.lang = "ja-JP";
         recognition.interimResults = true;
-        recognition.continuous = true;
+        // Android の「同じ確定結果が重複して届く」既知バグ対策。
+        // 1発話=1セッションにし、継続は既存の再起動ループ+「間」の束ねで担保する
+        recognition.continuous = false;
+        recognition.maxAlternatives = 1;
 
         recognition.onstart = () => {
           app.recognizing = true;
@@ -697,7 +700,7 @@
 
         recognition.onresult = (event) => {
           let interim = "";
-          let finalChunk = "";
+          let appended = false;
           let lastConfidence = null;
 
           for (let index = event.resultIndex; index < event.results.length; index += 1) {
@@ -710,7 +713,10 @@
             }
 
             if (result.isFinal) {
-              finalChunk += (finalChunk ? " " : "") + transcript;
+              // 確定結果は1件ずつ重複ガードを通して束ねる
+              if (appendFinalChunk(transcript, confidence)) {
+                appended = true;
+              }
             } else {
               interim += (interim ? " " : "") + transcript;
             }
@@ -724,17 +730,13 @@
             elements.confidenceValue.textContent = lastConfidence.toFixed(2);
           }
 
-          if (finalChunk) {
+          if (appended) {
             // 即応答せず束ねる: 息継ぎで isFinal が確定しても、無音が
             // pauseWindowMs 続くまで発話の続きを待つ
-            app.pendingUtterance = app.pendingUtterance
-              ? app.pendingUtterance + " " + finalChunk
-              : finalChunk;
             app.finalText = app.pendingUtterance;
             app.interimText = "";
             elements.finalText.textContent = app.pendingUtterance;
             elements.interimText.textContent = "";
-            logEvent("result-final", { text: finalChunk, confidence: lastConfidence });
             scheduleUtteranceCommit();
           } else if (interim && app.utteranceTimer) {
             // まだ話し続けている間は応答タイマーを延長する
@@ -809,6 +811,28 @@
 
           showError("音声認識を開始できません: " + getErrorMessage(error));
         }
+      }
+
+      // Android では同じ確定結果が重複して届くことがあるため、
+      // 束ね中テキストの末尾と重なる確定チャンクは捨てる（捨てた記録はログへ）
+      function appendFinalChunk(chunk, confidence) {
+        const text = (chunk || "").trim();
+        if (!text) {
+          return false;
+        }
+
+        const normalized = text.replace(/\s+/g, "");
+        const pendingNormalized = app.pendingUtterance.replace(/\s+/g, "");
+        if (normalized && pendingNormalized.endsWith(normalized)) {
+          logEvent("result-duplicate-skipped", { text: text });
+          return false;
+        }
+
+        app.pendingUtterance = app.pendingUtterance
+          ? app.pendingUtterance + " " + text
+          : text;
+        logEvent("result-final", { text: text, confidence: confidence });
+        return true;
       }
 
       function scheduleUtteranceCommit() {
